@@ -18,8 +18,10 @@ type cloudflareCreds struct {
 
 type Config struct {
 	Domain          string
+	SubDomain	string
 	Hostname        string
 	Interface       string
+	Addresses	string
 	CloudflareCreds cloudflareCreds
 	WebServer       webServer
 }

@@ -25,6 +25,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"net"
 )
 
 import log "github.com/sirupsen/logrus"
@@ -115,7 +116,12 @@ func main() {
 		interfaceName = *interfaceNamePtr
 		log.Debugf("Forcing the use of the interface: %s", interfaceName)
 	}
-	ip := interop.GetIP(interfaceName)
+	var ips []net.IP
+	var Globalips []net.IP
+	
+	ips = interop.GetIPs(interfaceName)
+
+	Globalips = interop.GetGlobalIPs(ips)
 
 	var hostname string
 	var fqdn string
@@ -158,10 +164,14 @@ func main() {
 		log.Debugf("UUID: %s", s)
 
 		log.Debug("Doing the insert")
-		_, err = database.Exec("INSERT INTO clients (uuid, hostname, IP) VALUES (?,?,?)", uuid, hostname, ip)
 
-		if err != nil {
-			log.Fatalf("Could not insert data into the database, error: %s", err)
+		for _, ip := range Globalips { 	
+
+			_, err = database.Exec("INSERT INTO clients (uuid, hostname, IP) VALUES (?,?,?)", uuid, hostname, ip.String())
+
+			if err != nil {
+				log.Fatalf("Could not insert data into the database, error: %s", err)
+			}
 		}
 
 		fqdn = fmt.Sprintf("%s.%s", hostname, Cfg.Domain)
@@ -254,8 +264,17 @@ func main() {
 	// os.Exit(10)
 
 	log.Printf("Creating DNS record")
-	log.Debugf("Creating A record for %s with IP %s", hostname, ip)
-	CreateOrUpdateDNSRecord("A", fqdn, ip)
+	for _, ip := range Globalips {
+
+		if ip.To4() != nil {
+		 log.Debugf("Creating A record for %s with IP %s", hostname, ip)
+		 CreateOrUpdateDNSRecord("A", fqdn, ip.String())
+		} else {
+		 log.Debugf("Creating AAAA record for %s with IP %s", hostname, ip)
+		 CreateOrUpdateDNSRecord("AAAA", fqdn, ip.String())		
+		}
+	}
+	
 
 	StartWebServer()
 }
