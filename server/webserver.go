@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/digininja/ots-cert-demo/interop"
+	"github.com/firebladed/ots-cert-demo/interop"
 	"github.com/docker/docker/pkg/namesgenerator"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -71,12 +71,12 @@ func writeError(w http.ResponseWriter, msg string) {
 type Client struct {
 	uuid     string
 	hostname string
-	ip       string
+	ips      []net.IP
 }
 
 func getClient(uuid string) Client {
 	log.Debugf("Loading client from database, UUID: %s", uuid)
-	rows, err := database.Query("SELECT uuid, hostname, IP FROM clients WHERE uuid = ?", uuid)
+	rows, err := database.Query("SELECT uuid, hostname FROM clients WHERE uuid = ?", uuid)
 	if err != nil {
 		log.Fatalf("Error loading client from database, error: %s", err)
 	}
@@ -84,11 +84,11 @@ func getClient(uuid string) Client {
 	var client Client
 	row_count := 0
 	for rows.Next() {
-		err := rows.Scan(&client.uuid, &client.hostname, &client.ip)
+		err := rows.Scan(&client.uuid, &client.hostname)
 		if err != nil {
 			log.Fatalf("Error scanning returned rows, error: %s", err)
 		}
-		log.Debugf("Client found, UUID: %s, Hostname: %s, IP: %s", client.uuid, client.hostname, client.ip)
+		log.Debugf("Client found, UUID: %s, Hostname: %s", client.uuid, client.hostname)
 		row_count++
 	}
 	log.Debugf("Number of rows returned %d", row_count)
@@ -100,6 +100,25 @@ func getClient(uuid string) Client {
 	if row_count > 1 {
 		// Should never get here as uuid is a primary key
 		log.Fatal("Multiple hits, this shouldn't happen")
+	}
+
+	rows, err = database.Query("SELECT ip FROM addresses WHERE uuid = ?", uuid)
+	row_count = 0
+	var ipstr string
+	var ip []net.IP
+	for rows.Next() {
+		err := rows.Scan(&ipstr)
+		if err != nil {
+			log.Fatalf("Error scanning returned rows, error: %s", err)
+		}		
+		log.Debugf("Address found, UUID: %s, Hostname: %s, IP: %s", client.uuid, client.hostname, ipstr)
+		client.ips = append(client.ips,net.ParseIP(ipstr))
+		row_count++
+	}
+	log.Debugf("Number of rows returned %d", row_count)
+	err = rows.Err()
+	if err != nil {
+		log.Fatalf("Error accessing database, error: %s", err)
 	}
 
 	return client
@@ -138,12 +157,17 @@ func generateCertificate(w http.ResponseWriter, r *http.Request) {
 
 	client := getClient(parsedUuid.String())
 
-	if client == (Client{}) {
+	if ((client.uuid == "") || (client.hostname == "") || (len(client.ips)== 0)) {
 		log.Printf("Invalid request, aborting")
 		log.Debugf("Client not found")
 		return
 	}
-	log.Debugf("Request is for: UUID %s, Hostname %s, IP %s", client.uuid, client.hostname, client.ip)
+
+	log.Debugf("Request is for: UUID %s, Hostname %s", client.uuid, client.hostname)
+	for _, ip := range client.ips {
+		log.Debugf("IP %s", ip.String())
+	}
+
 
 	certificaterRequest.ClientID = parsedUuid.String()
 	log.Debugf("The client ID is: %s", certificaterRequest.ClientID)
@@ -187,6 +211,7 @@ func generateCertificate(w http.ResponseWriter, r *http.Request) {
 }
 
 var privateIPBlocks []*net.IPNet
+var validIPBlocks []*net.IPNet
 
 func init() {
 	for _, cidr := range []string{
@@ -196,10 +221,15 @@ func init() {
 		"192.168.0.0/16", // RFC1918
 		//"::1/128",        // IPv6 loopback
 		//"fe80::/10",      // IPv6 link-local
+		"fc00::/7",	    // IPv6 ULAs
 	} {
 		_, block, _ := net.ParseCIDR(cidr)
 		privateIPBlocks = append(privateIPBlocks, block)
 	}
+	
+	_, block, _ := net.ParseCIDR("2000::/3")
+	validIPBlocks = append(privateIPBlocks, block) 	
+
 }
 
 func isPrivateIP(ip net.IP) bool {
@@ -210,6 +240,16 @@ func isPrivateIP(ip net.IP) bool {
 	}
 	return false
 }
+
+func isValidIP(ip net.IP) bool {
+	for _, block := range validIPBlocks {
+		if block.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 
 func registerClient(w http.ResponseWriter, r *http.Request) {
 	mutex.Lock()
@@ -246,17 +286,30 @@ func registerClient(w http.ResponseWriter, r *http.Request) {
 		This is an optional check put in here to try to stop the demo system from being
 		abused by creating certificates for public facing sites.
 	*/
-	if !isPrivateIP(net.ParseIP(regClient.IP)) {
-		msg := (fmt.Sprintf("The IP address passed in is not private: %s", regClient.IP))
-		log.Printf("%s", msg)
-		regClientResponse := interop.RegClientResponse{Hostname: "", Success: false, Message: msg}
-		s := regClientResponse.Marshall()
-		log.Debugf("The marshalled message is: %s", s)
-		writeError(w, s)
-		return
+	var filteredips []net.IP
+	for _, clientip := range regClient.IPs {
+
+		if !isValidIP(clientip) {
+			log.Printf("The IP address passed in is not valid: %s", clientip.String())
+		} else {
+			filteredips = append(filteredips,clientip)
+			log.Debugf("The IP address is: %s", clientip.String())
+		}
+		
 	}
+	regClient.IPs = filteredips
+
+	if len(regClient.IPs) <= 0 {
+			msg := (fmt.Sprintf("No IP addresses passed in are valid"))
+			regClientResponse := interop.RegClientResponse{Hostname: "", Success: false, Message: msg}
+			s := regClientResponse.Marshall()
+			log.Debugf("The marshalled message is: %s", s)
+			writeError(w, s)
+			return		
+	}
+
+
 	regClient.ClientID = parsedUuid.String()
-	log.Debugf("The IP address is: %s", regClient.IP)
 
 	row := database.QueryRow("SELECT COUNT(*) FROM clients WHERE uuid=?", regClient.ClientID)
 	var count int
@@ -293,17 +346,37 @@ func registerClient(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	log.Debug("Doing the insert")
-	_, err = database.Exec("INSERT INTO clients (uuid, hostname, IP) VALUES (?,?,?)", regClient.ClientID, hostname, regClient.IP)
+	_, err = database.Exec("INSERT INTO clients (uuid, hostname) VALUES (?,?)", regClient.ClientID, hostname)
 
 	if err != nil {
 		log.Fatalf("Could not insert data into the database, error: %s", err)
 	}
+	
+	for _, clientip := range regClient.IPs {
+
+		_, err = database.Exec("INSERT INTO addresses (uuid, ip) VALUES (?,?)", regClient.ClientID, clientip.String())
+
+		if err != nil {
+			log.Fatalf("Could not insert data into the database, error: %s", err)
+		}
+	}
+
 
 	log.Printf("Creating DNS record")
-	log.Debugf("Creating A record for %s with IP %s", hostname, regClient.IP)
 	fqdn := fmt.Sprintf("%s.%s", hostname, Cfg.Domain)
-	CreateOrUpdateDNSRecord("A", fqdn, regClient.IP)
+	for _, clientip := range regClient.IPs {
 
+		if clientip.To16() != nil { // valid IP address
+			if clientip.To4() != nil { // ipv4 address
+				CreateOrUpdateDNSRecord("A", fqdn, clientip.String())
+				log.Debugf("Creating A record for %s with IP %s", hostname, clientip.String())
+			} else { // ipv6 address
+				CreateOrUpdateDNSRecord("AAAA", fqdn, clientip.String())
+				log.Debugf("Creating AAAA record for %s with IP %s", hostname, clientip.String())
+
+			}
+		}
+	}
 	regClientResponse := interop.RegClientResponse{Hostname: fqdn, Success: true, Message: "done"}
 	js, err := json.Marshal(regClientResponse)
 	if err != nil {

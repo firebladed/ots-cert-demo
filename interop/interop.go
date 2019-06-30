@@ -3,6 +3,8 @@ package interop
 import (
 	"encoding/json"
 	"fmt"
+	"net"
+
 )
 
 import log "github.com/sirupsen/logrus"
@@ -44,7 +46,7 @@ func (r RegClient) Unmarshall(s string) (error, regClient) {
 type RegClientRequest struct {
 	JSONMessage
 	ClientID string
-	IP       string
+	IPs      []net.IP
 }
 
 func (r RegClientResponse) Marshall() string {

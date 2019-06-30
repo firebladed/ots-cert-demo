@@ -6,8 +6,8 @@ import (
 	"encoding/pem" // needed for debug writing out csr
 	"flag"
 	"fmt"
-	"github.com/digininja/ots-cert-demo/client/config"
-	"github.com/digininja/ots-cert-demo/interop"
+	"github.com/firebladed/ots-cert-demo/client/config"
+	"github.com/firebladed/ots-cert-demo/interop"
 	"github.com/google/uuid"
 	"io/ioutil"
 	"net/http"
@@ -80,7 +80,8 @@ func main() {
 		interfaceName = *interfaceNamePtr
 		log.Debugf("Forcing the use of the interface: %s", interfaceName)
 	}
-	ip := interop.GetIP(interfaceName)
+	ips := interop.GetIPs(interfaceName)	
+	
 
 	log.Debugf("Client registration URL: %s", Cfg.ClientRegistrationURL)
 	log.Debugf("Certificate request URL: %s", Cfg.CertificateRequestURL)
@@ -98,7 +99,7 @@ func main() {
 	clientID := uuid.String()
 	log.Debugf("UUID: %s", clientID)
 
-	regClientRequest := interop.RegClientRequest{ClientID: clientID, IP: ip}
+	regClientRequest := interop.RegClientRequest{ClientID: clientID, IPs: ips}
 	js, err := json.Marshal(regClientRequest)
 	if err != nil {
 		log.Fatalf(fmt.Sprintf("Error marshalling the JSON request: %s", err.Error()))

@@ -18,8 +18,8 @@ import (
 	"encoding/pem" // needed for debug writing out csr
 	"flag"
 	"fmt"
-	"github.com/digininja/ots-cert-demo/interop"
-	"github.com/digininja/ots-cert-demo/server/config"
+	"github.com/firebladed/ots-cert-demo/interop"
+	"github.com/firebladed/ots-cert-demo/server/config"
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 	"os"
@@ -43,12 +43,20 @@ func initDatabase() {
 
 	log.Debug("Creating the database if required")
 
-	statement, err := database.Prepare("CREATE TABLE IF NOT EXISTS clients (uuid TEXT PRIMARY KEY, hostname TEXT, IP TEXT)")
+	statement, err := database.Prepare("CREATE TABLE IF NOT EXISTS clients (uuid TEXT PRIMARY KEY, hostname TEXT)")
 	statement.Exec()
 
 	if err != nil {
 		log.Fatalf("can't create the table, error: %s", err.Error())
 	}
+	statement, err = database.Prepare("CREATE TABLE IF NOT EXISTS addresses (uuid TEXT, IP TEXT,PRIMARY KEY (uuid,IP)) ")
+	statement.Exec()
+
+	if err != nil {
+		log.Fatalf("can't create the table, error: %s", err.Error())
+	}
+
+
 }
 
 var Cfg config.Config
@@ -165,13 +173,22 @@ func main() {
 
 		log.Debug("Doing the insert")
 
-		for _, ip := range Globalips { 	
-
-			_, err = database.Exec("INSERT INTO clients (uuid, hostname, IP) VALUES (?,?,?)", uuid, hostname, ip.String())
+			_, err = database.Exec("INSERT INTO clients (uuid, hostname) VALUES (?,?)", uuid, hostname)
 
 			if err != nil {
 				log.Fatalf("Could not insert data into the database, error: %s", err)
 			}
+
+		for _, ip := range Globalips { 	
+
+			_, err = database.Exec("INSERT INTO addresses (uuid, ip) VALUES (?,?)", uuid, ip.String())
+
+			if err != nil {
+				log.Fatalf("Could not insert data into the database, error: %s", err)
+			}
+
+
+
 		}
 
 		fqdn = fmt.Sprintf("%s.%s", hostname, Cfg.Domain)
